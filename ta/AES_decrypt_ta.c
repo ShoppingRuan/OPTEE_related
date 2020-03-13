@@ -33,6 +33,8 @@
 
 #include "AES_decrypt_ta.h"
 
+#define BLOCKSIZE  16
+
 /*
  * Called when the instance of the TA is created. This is the first call in
  * the TA.
@@ -68,8 +70,6 @@ TEE_Result TA_OpenSessionEntryPoint(uint32_t param_types,
 						   TEE_PARAM_TYPE_NONE,
 						   TEE_PARAM_TYPE_NONE);
 
-	DMSG("has been called");
-
 	if (param_types != exp_param_types)
 		return TEE_ERROR_BAD_PARAMETERS;
 
@@ -81,7 +81,7 @@ TEE_Result TA_OpenSessionEntryPoint(uint32_t param_types,
 	 * The DMSG() macro is non-standard, TEE Internal API doesn't
 	 * specify any means to logging from a TA.
 	 */
-	IMSG("Hello World!\n");
+	IMSG("Session open!\n");
 
 	/* If return value != TEE_SUCCESS the session will not be created. */
 	return TEE_SUCCESS;
@@ -100,14 +100,16 @@ void TA_CloseSessionEntryPoint(void __maybe_unused *sess_ctx)
 static TEE_Result Decrypt_Ciphertext(uint32_t param_types,
 	TEE_Param params[4])
 {	
-	TEE_Attribute l_pAttr;
-	TEE_OperationHandle l_pOperation = NULL;
-    TEE_ObjectHandle l_pKeyObj = NULL;
-    char* l_pInbuf = (char *)params[0].memref.buffer;
-    char* l_pOutbuf = (char *)params[1].memref.buffer;
-    uint32_t l_dataLen = params[0].memref.size;
-	uint32_t write_bytes = params[1].memref.size;
-	TEE_Result l_RetVal = 0;
+	TEE_Attribute attr;
+	TEE_OperationHandle oper = NULL;
+	TEE_ObjectHandle obj = NULL;
+    	unsigned char* inbuf = (unsigned char *)params[0].memref.buffer;
+    	unsigned char* outbuf = (unsigned char *)params[1].memref.buffer;
+    	uint32_t inlen = params[0].memref.size;
+	uint32_t outlen = params[1].memref.size;
+	uint32_t leavelen = outlen;
+	uint32_t writelen = 0;
+	TEE_Result ret = 0;
 	
 	char key[]="qxhzngy266a186ke";
 	char IV[] ="1ci5crnda6ojzgtr";
@@ -116,78 +118,90 @@ static TEE_Result Decrypt_Ciphertext(uint32_t param_types,
 						   TEE_PARAM_TYPE_MEMREF_OUTPUT,
 						   TEE_PARAM_TYPE_NONE,
 						   TEE_PARAM_TYPE_NONE);
-
-	DMSG("has been called");
-
 	if (param_types != exp_param_types)
 		return TEE_ERROR_BAD_PARAMETERS;
 	
-	/**1) Allocate the operation handle */
-    l_RetVal = TEE_AllocateOperation(&l_pOperation, TEE_ALG_AES_CBC_NOPAD, TEE_MODE_DECRYPT,strlen(key)*8);
-    if(TEE_SUCCESS != l_RetVal)
-    {
-        //l_Result = FAIL;
-		//l_RetVal = TEE_ERROR_OUT_OF_MEMORY 	;
-		DMSG("has been called");
-        goto cleanup_1;
-    }
+	/** 1) Allocate the operation handle */
+    	ret = TEE_AllocateOperation(&oper, TEE_ALG_AES_CBC_NOPAD, TEE_MODE_DECRYPT, strlen(key)*8);
+    	if(ret != TEE_SUCCESS)
+    	{
+		DMSG("TEE_AllocateOperation eeeor");
+        	goto cleanup_1;
+   	 }
 	
 	DMSG("has been called");
 	
-	/**2) Allocate the object handle */
-    l_RetVal = TEE_AllocateTransientObject(TEE_TYPE_AES, strlen(key)*8, &l_pKeyObj);
-    if(TEE_SUCCESS != l_RetVal)
-    {
+	/**2)  Allocate the key object handle */
+    	ret = TEE_AllocateTransientObject(TEE_TYPE_AES, strlen(key)*8, &obj);
+    	if(ret != TEE_SUCCESS)
+    	{
         //l_Result = TEE_ERROR_OUT_OF_MEMORY 	;
-		DMSG("has been called");
-        goto cleanup_1;
-    }   
+		DMSG("TEE_AllocateTransientObject error");
+        	goto cleanup_2;
+    	}   
 	
 	DMSG("has been called");
 	
 	/**3) Set the key object parameter */
-    TEE_InitRefAttribute(&l_pAttr, TEE_ATTR_SECRET_VALUE, key, strlen(key)); //16
-    l_RetVal = TEE_PopulateTransientObject(l_pKeyObj, &l_pAttr, 1);
-    if(TEE_SUCCESS != l_RetVal)
-    {
-        //l_Result = FAIL;
-		DMSG("has been called");
-        goto cleanup_1;
-    }
+    	TEE_InitRefAttribute(&attr, TEE_ATTR_SECRET_VALUE, key, strlen(key)); 
+    	ret = TEE_PopulateTransientObject(obj, &attr, 1);
+    	if(ret != TEE_SUCCESS)
+    	{
+		DMSG("TEE_PopulateTransientObject error");
+        	goto cleanup_3;
+    	}
 	
 	DMSG("has been called");
 	/**4) Assemble aes operation handle */
-    l_RetVal = TEE_SetOperationKey(l_pOperation, l_pKeyObj);
-    if(TEE_SUCCESS != l_RetVal)
-    {
+    	ret = TEE_SetOperationKey(oper, obj);
+    	if(ret != TEE_SUCCESS)
+    	{
         //l_Result = FAIL;
-		DMSG("has been called");
-        goto cleanup_2;
-    }
+		DMSG("TEE_SetOperationKey error");
+        	goto cleanup_3;
+    	}
 	DMSG("has been called");
 	
-	TEE_CipherInit(l_pOperation, IV, strlen(IV));
-	//l_RetVal = TEE_CipherUpdate(l_pOperation, l_pInbuf, l_dataLen, l_pOutbuf, &write_bytes);
-	l_RetVal = TEE_CipherDoFinal(l_pOperation, l_pInbuf, l_dataLen, l_pOutbuf, &write_bytes);
-	if(TEE_SUCCESS != l_RetVal)
-    {
-        //l_Result = FAIL;
-		DMSG("has been called");
-        goto cleanup_2;
-    }
+	TEE_CipherInit(oper, IV, strlen(IV));
+	while( inlen > BLOCKSIZE){
+		ret = TEE_CipherUpdate(oper, inbuf, BLOCKSIZE, outbuf, &leavelen);
+		if(ret != TEE_SUCCESS)
+		{
+			DMSG("TEE_CipherUpdate error");
+			goto cleanup_3;
+		}
+		inlen -= BLOCKSIZE;
+		inbuf  = &(inbuf[BLOCKSIZE]);
+		outbuf = &(outbuf[BLOCKSIZE]);
+		writelen += leavelen;
+		leavelen = outlen-writelen;
+	}
+	if( inlen % BLOCKSIZE !=0){
+		DMSG("Input cipher not satisfy");
+		goto cleanup_3;
+	}
+	else{
+		ret = TEE_CipherDoFinal(oper, inbuf, inlen, outbuf, &leavelen);
+		if(ret != TEE_SUCCESS)
+		{
+			DMSG("TEE_CipherDoFinal error");
+			goto cleanup_3;
+		}
+	}
 	
-	DMSG("has been called");
-	
-	//params[0].memref.size = write_bytes;
-	//TF("The aes operation out put just like follow:\n");
-    //g_TA_Printf(l_pOutbuf, write_bytes);
-	l_pOutbuf[write_bytes]='\0';
-	DMSG("has been called");
+	DMSG("Decrypt success");
+	DMSG("writelen:%d,leavelen:%d",writelen,leavelen);
 
+	outbuf[leavelen]='\0';
+
+	params[1].memref.size = writelen+leavelen;
+
+cleanup_3:
+	TEE_FreeTransientObject(obj);
 cleanup_2:
-    TEE_FreeOperation(l_pOperation);
+    	TEE_FreeOperation(oper);
 cleanup_1:
-    return l_RetVal;
+    	return ret;
 }
 /*
  * Called when a TA is invoked. sess_ctx hold that value that was

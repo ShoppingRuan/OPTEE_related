@@ -37,10 +37,8 @@
 /* To the the UUID (found the the TA's h-file(s)) */
 #include <AES_decrypt_ta.h>
 
-#define FILE_PATH "/data/test.txt"
-#define SIZE  255
-
-unsigned char msg[]="\xc3\xc9\x01\xda\xd0\x58\xf1\xd8\x77\x61\xf1\x81\xfe\xf6\xd8\xce";
+#define FILEPATH "/data/test"
+#define BUFSIZE  255
 
 int main(int argc, char *argv[])
 {
@@ -50,10 +48,41 @@ int main(int argc, char *argv[])
 	TEEC_Operation op;
 	TEEC_UUID uuid = TA_AES_DECRYPT_UUID;
 	uint32_t err_origin;
-	unsigned char filebuf[SIZE];
-	uint32_t filelength = 0 ;
-	unsigned char textbuf[SIZE] ;
-	//long textlength =0 ;
+	
+	FILE *fp = NULL;
+	unsigned char cipher[BUFSIZE];
+	unsigned char plain[BUFSIZE];
+	uint32_t filelen = 0;
+	const unsigned char msg[]="\x94\x24\x14\x32\xc3\x05\x6b\x1a\xd2\xc7\x1a\x73"
+				  "\x7f\xc4\x72\x39\x57\xc5\xc2\xed\x18\x4a\x68\x75"
+				  "\x48\xa7\x61\xf1\x3f\xa6\x20\xc1";
+								
+	memset(cipher,0,BUFSIZE);
+	memset(plain,0,BUFSIZE);
+	
+	if(access(FILEPATH,F_OK) == -1)
+	{
+		fp = fopen(FILEPATH, "w");
+		fprintf(fp,"%s",msg);
+		fclose(fp);
+		fp = NULL;
+		printf("No file exist yet, create file success\n");
+	}
+	
+	fp = fopen(FILEPATH, "r");
+	if(fp == NULL){
+		printf("File exist but fail to read,please check.\n");
+		return -1;
+	}
+	else{
+		fseek(fp,0,SEEK_END);
+		filelen = ftell(fp);
+		rewind(fp); 
+		/*assume count char in file < 255 */
+		fread(cipher,sizeof(unsigned char),filelen,fp);             
+		fclose(fp);
+		printf("read file,len is %d\n",filelen);
+	}
 
 	/* Initialize a context connecting us to the TEE */
 	res = TEEC_InitializeContext(NULL, &ctx);
@@ -61,73 +90,34 @@ int main(int argc, char *argv[])
 		errx(1, "TEEC_InitializeContext failed with code 0x%x", res);
 
 	/*
-	 * Open a session to the "hello world" TA, the TA will print "hello
-	 * world!" in the log when the session is created.
+	 * Open a session to the TA, the TA will decrypt ciphertext.
 	 */
 	res = TEEC_OpenSession(&ctx, &sess, &uuid,
 			       TEEC_LOGIN_PUBLIC, NULL, NULL, &err_origin);
 	if (res != TEEC_SUCCESS)
 		errx(1, "TEEC_Opensession failed with code 0x%x origin 0x%x",
 			res, err_origin);
-	
-	FILE *fp = NULL;	
-	if(access(FILE_PATH,F_OK) == -1)
-	{
-		fp = fopen(FILE_PATH, "w");
-		fprintf(fp,"%s",msg);
-		fclose(fp);
-		fp = NULL;
-		printf("No file exist yet, create file success\n");
-	}
-	
-	fp = fopen(FILE_PATH, "r");
-	if(fp == NULL){
-		printf("File exist but fail to read,please check.\n");
-		return -1;
-	}
-	else{
-		fseek(fp,0,SEEK_END);
-		filelength = ftell(fp);
-		rewind(fp); 
-		fread(filebuf,sizeof(unsigned char),filelength,fp);
-		filebuf[filelength] = '\0';             
-		fclose(fp);
-		printf("read:%d %s\n",filelength,filebuf);
-	}
-	
-	/*
-	 * Execute a function in the TA by invoking it, in this case
-	 * we're incrementing a number.
-	 *
-	 * The value of command ID part and how the parameters are
-	 * interpreted is part of the interface provided by the TA.
-	 */
 
 	/* Clear the TEEC_Operation struct */
 	memset(&op, 0, sizeof(op));
-
-	/*
-	 * Prepare the argument. Pass a value in the first parameter,
-	 * the remaining three parameters are unused.
-	 */
+	
 	op.paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INPUT, TEEC_MEMREF_TEMP_OUTPUT,
 					 TEEC_NONE, TEEC_NONE);
-	op.params[0].tmpref.buffer = filebuf;
-	op.params[0].tmpref.size = filelength;
-	op.params[1].tmpref.buffer = textbuf;
-	op.params[1].tmpref.size = SIZE;
+	op.params[0].tmpref.buffer = cipher;
+	op.params[0].tmpref.size = filelen;
+	op.params[1].tmpref.buffer = plain;
+	op.params[1].tmpref.size = BUFSIZE;
 
 	/*
-	 * TA_HELLO_WORLD_CMD_INC_VALUE is the actual function in the TA to be
+	 * TA_AES_DECRYPT is the actual function in the TA to be
 	 * called.
 	 */
-	//printf("Invoking TA to increment %d\n", op.params[0].value.a);
 	res = TEEC_InvokeCommand(&sess, TA_AES_DECRYPT, &op,
 				 &err_origin);
 	if (res != TEEC_SUCCESS)
 		errx(1, "TEEC_InvokeCommand failed with code 0x%x origin 0x%x",
 			res, err_origin);
-	printf("Get text: %s\n", op.params[1].tmpref.buffer);
+	printf("Get plain text: %s,return len is %d\n", (unsigned char*)op.params[1].tmpref.buffer,(int)op.params[1].tmpref.size);
 
 	/*
 	 * We're done with the TA, close the session and
